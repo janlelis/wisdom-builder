@@ -1,0 +1,19 @@
+#!/bin/bash
+
+echo "PHASE 5: Building single corpus file"
+current_dir=$(dirname $0)
+filename=javascript
+source_dir="$current_dir/data/4"
+dest_dir="$current_dir/data/5"
+glob="*.js"
+
+mkdir -p $dest_dir
+rm -f "$dest_dir/$filename"
+touch "$dest_dir/$filename"
+for f in $source_dir/$glob;  do
+  [[ -e $f ]] || continue
+  cat $f >> "$dest_dir/$filename"
+done
+echo "PHASE 5: Compressing…"
+bzip2 "$dest_dir/$filename"
+echo "PHASE 5: Success"

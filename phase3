@@ -1,0 +1,96 @@
+#!/usr/bin/ruby
+
+# TODO also find files by shebang
+# or sth like https://github.com/github/linguist
+
+
+require "fileutils"
+require "securerandom"
+
+require "whirly"
+
+class NestedFileNormalizer
+  class Failed < StandardError; end
+
+  REPOSITORY_LIST_FILENAME = "/1/repositories.txt"
+  SOURCE_DIRECTORY = "/2"
+  DESTINATION_DIRECTORY = "/3"
+
+  def initialize(data_dir, extensions, offset)
+    @data_dir     = data_dir
+    @extensions   = extensions
+    @repositories = File.readlines(@data_dir + REPOSITORY_LIST_FILENAME).map(&:chomp)
+    @offset       = offset # starts at 1
+  end
+
+  def skip?
+    @offset > @repositories.size
+  end
+
+  def run!
+    Whirly.start spinner: "hearts" do
+      destination = @data_dir + DESTINATION_DIRECTORY
+      source      = @data_dir + SOURCE_DIRECTORY
+      # This could be easilly parallelized
+      if @offset > 1
+        puts "Starting PHASE 3 at offset #{@offset}"
+      else
+        puts "Starting PHASE 3"
+      end
+      puts "Destination Directory: #{destination}"
+      FileUtils.mkdir_p(destination)
+      FileUtils.cd(source)
+
+      trap(:INT) do
+        $stderr.puts "PHASE 3 canceled by interrupt"
+        @current_normalized_files.each{ |file|
+          FileUtils::Verbose.rm_f(file)
+        }
+        $stderr.puts "PHASE 3 canceled | Next offset: #{@current_offset}"
+        exit(2)
+      end
+
+      repositories_to_do = @repositories[(@offset - 1) .. -1]
+      repositories_to_do.each.with_index{ |clone_url, index|
+        @current_offset       = @offset + index
+        @current_source_folder    = clone_url[%r<github.com/([^/]+?/.+)\.git>, 1]
+        Whirly.status = "Normalizing #{@current_source_folder} [#{@current_offset}/#{@repositories.size}]"
+        @current_source_files = Dir["#{@current_source_folder}/**/*.{#{@extensions.join(',')}}"]
+        @current_normalized_files = []
+
+        @current_source_files.each{ |file|
+          next unless File.file?(file)
+          destination_file = destination + "/" + SecureRandom.uuid + '.' + @extensions[0]
+          @current_normalized_files.push(destination_file)
+          copy_file(file, destination_file)
+        }
+      }
+    end
+
+    puts "PHASE 3 | Success!"
+    true
+  end
+
+  def copy_file(source, destination)
+    FileUtils.cp(source, destination)
+    FileUtils.chmod(0664, destination)
+  end
+end
+
+data_dir   = File.expand_path(File.dirname(__FILE__) + "/data")
+extensions = ($*[0] || "js es6 jsx jsm").split
+offset     = ($*[1] || 1).to_i
+
+begin
+  nested_file_normalizer = NestedFileNormalizer.new(data_dir, extensions, offset)
+  if nested_file_normalizer.skip?
+    puts "PHASE 3 skipped"
+  else
+    nested_file_normalizer.run!
+  end
+  exit(0)
+rescue NestedFileNormalizer::Failed => e
+  $stderr.puts("PHASE 3 canceled: #{e.message}")
+  exit(1)
+end
+

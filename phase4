@@ -1,0 +1,69 @@
+#!/usr/bin/env ruby
+
+require "coderay"
+require "fileutils"
+
+require "whirly"
+
+class BatchTokenizer
+  class Failed < StandardError; end
+
+  SOURCE_DIRECTORY = "/3"
+  DESTINATION_DIRECTORY = "/4"
+
+  def initialize(data_dir)
+    @data_dir     = data_dir
+  end
+
+  def skip?
+    false
+  end
+
+  def tokenize(code)
+    CodeRay.
+    scan(code, :javascript).
+    tokens.each_slice(2).
+    select{ |token, kind|
+      token.is_a?(String) && kind != :comment && kind != :space}.
+    map(&:first).
+    to_a.join(" ")
+  end
+
+  def run!
+    Whirly.start spinner: "growVertical" do
+      destination = @data_dir + DESTINATION_DIRECTORY
+      source      = @data_dir + SOURCE_DIRECTORY
+      puts "Starting PHASE 4"
+      puts "Destination Directory: #{destination}"
+      FileUtils.mkdir_p(destination)
+      FileUtils.cd(source)
+
+      trap(:INT) do
+        $stderr.puts "PHASE 4 canceled by interrupt | Output might might be inconsistent"
+        exit(1)
+      end
+
+      Dir[source + "/*"].each{ |filename|
+        File.write destination + "/" + File.basename(filename), tokenize(File.read(filename))
+      }
+    end
+
+    puts "PHASE 4 | Success!"
+    true
+  end
+end
+
+data_dir   = File.expand_path(File.dirname(__FILE__) + "/data")
+
+begin
+  batch_tokenizer = BatchTokenizer.new(data_dir)
+  if batch_tokenizer.skip?
+    puts "PHASE 4 skipped"
+  else
+    batch_tokenizer.run!
+  end
+  exit(0)
+rescue BatchTokenizer::Failed => e
+  $stderr.puts("PHASE 4 canceled: #{e.message}")
+  exit(1)
+end

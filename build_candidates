@@ -1,0 +1,86 @@
+#!/usr/bin/env ruby
+
+require "fileutils"
+require "json"
+
+DEFAULT_CANDIDATE_LIMIT = 25_000
+
+vocab_filename       = $*[0] or raise "No vocab file given"
+arpa_filename        = $*[1] or raise "No arpa file given"
+destination_filename_prefix     = $*[2] or raise "No destination file prefix given"
+destination_candidates_filename = destination_filename_prefix + ".candidates"
+destination_vocab_filename      = destination_filename_prefix + ".candidates.vocab"
+candidate_limit      = $*[3] || DEFAULT_CANDIDATE_LIMIT
+
+words = Hash.new{ |h, k| h[k] = [] }
+unigrams_raw = nil
+bigrams_raw = nil
+
+# TODO currently loads everything into memory, should be chunked
+puts "CUT UNIGRAMS AND BIGRAMS"
+File.open(arpa_filename, "r"){ |s|
+                 s.gets("\\1-grams:\n")
+  unigrams_raw = s.gets("\\2-grams:\n").chomp("\\2-grams:\n")
+  bigrams_raw  = s.gets("\\3-grams:\n").chomp("\\3-grams:\n")
+}
+
+puts "MOST COMMON UNIGRAMS"
+words["<unk>"] = unigrams_raw.split("\n").map{ |line|
+  line.split[0..1]
+}.sort_by{ |prob, unigram| -prob.to_f }[0, candidate_limit].
+map{ |prob, unigram| unigram }
+unigrams_raw = nil
+
+puts "RETRIEVE CANDIDATES"
+bigrams_raw.split("\n").each{ |line|
+  next unless line
+  prob, pre, suf = line.split[0..2]
+  next if !suf || suf == "</s>" || suf == "<s>"
+  words[pre] << [suf, prob]
+}
+bigrams_raw = nil
+
+puts "START COMPACTING"
+words.keys.each{ |key|
+  if words[key].size > candidate_limit
+    words[key] = words[key].sort_by{ |suf, prob|
+      -prob.to_f
+    }[0, candidate_limit].
+    map(&:first)
+  elsif key != "<unk>" # TODO unify code
+    words[key] = words[key].map(&:first).uniq
+  end
+}
+
+puts "BUILDING WORD LIST"
+vocab = (words.keys + words.values.flatten).uniq.sort
+# p "vocab includens <unk>", vocab.include?("<unk>")
+
+# puts "READ VOCAB"
+# vocab = File.read(vocab_filename).split("\0")
+# vocab.select!{ |word| words.has_key?(word) }
+reverse_vocab = Hash[ vocab.map.with_index.to_a ]
+
+puts "START INDEXING"
+word_indexes = {}
+words.each{ |word, candidates|
+  word_indexes[reverse_vocab[word]] = candidates.map{ |candidate| reverse_vocab[candidate] }
+}
+
+puts "DELETE OLD FILES"
+FileUtils.rm_f(destination_candidates_filename)
+FileUtils.touch(destination_candidates_filename)
+FileUtils.rm_f(destination_vocab_filename)
+FileUtils.touch(destination_vocab_filename)
+
+puts "START WRTIGNG", word_indexes.size
+puts destination_candidates_filename
+File.write(destination_candidates_filename, JSON.dump(word_indexes))
+
+puts "START WRTIGNG VOCAB", vocab.size
+File.write(destination_vocab_filename, vocab.join("\0"))
+
+
+#File.open(destination_filename, "w"){ |d|
+#  words.each{ |word, values| d.puts "#{word} #{values.join(" ")}" }
+#}

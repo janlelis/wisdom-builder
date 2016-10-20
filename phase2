@@ -1,0 +1,82 @@
+#!/usr/bin/ruby
+
+require "fileutils"
+
+require "whirly"
+
+class RepoDownloader
+  class Failed < StandardError; end
+
+  REPOSITORY_LIST_FILENAME = "/1/repositories.txt"
+  DESTINATION_DIRECTORY = "/2"
+
+  def initialize(data_dir, offset)
+    @data_dir     = data_dir
+    @repositories = File.readlines(@data_dir + REPOSITORY_LIST_FILENAME).map(&:chomp)
+    @offset       = offset # starts at 1
+  end
+
+  def skip?
+    destination = @data_dir + DESTINATION_DIRECTORY
+    FileUtils.mkdir_p(destination)
+    Dir[destination + "/*/*"].size == @repositories.size || @offset > @repositories.size
+  end
+
+  def run!
+    Whirly.start spinner: "pong", position: "below" do
+      destination = @data_dir + DESTINATION_DIRECTORY
+      # This could be easilly parallelized
+      if @offset > 1
+        puts "Starting PHASE 2 at offset #{@offset}"
+      else
+        puts "Starting PHASE 2"
+      end
+      puts "Destination Directory: #{destination}"
+      FileUtils.mkdir_p(destination)
+      FileUtils.cd(destination)
+     
+      trap(:INT) do
+        $stderr.puts "PHASE 2 canceled | Interrupt"
+        FileUtils::Verbose.rm_f @current_clone_folder.split("/")[0]
+        $stderr.puts "PHASE 2 canceled | Next offset: #{@current_offset}"
+        exit(2)
+      end
+
+      repositories_to_do = @repositories[(@offset - 1) .. -1]
+      repositories_to_do.each.with_index{ |clone_url, index|
+        @current_offset       = @offset + index
+        @current_clone_url    = clone_url
+        @current_clone_folder = clone_url[%r<github.com/([^/]+?/.+)\.git>, 1]
+        Whirly.status = "Cloning #{@current_clone_url} [#{@current_offset}/#{@repositories.size}]"
+        clone(@current_clone_url, @current_clone_folder)
+      }
+    end
+
+    puts "PHASE 2 | Success!"
+
+    true
+  end
+
+  def clone(url, folder)
+    puts "git clone #{url} #{folder}"
+    FileUtils.mkdir_p(folder.split("/")[0])
+    system "git clone #{url} #{folder}"
+  end
+end
+
+data_dir = File.expand_path(File.dirname(__FILE__) + "/data")
+offset   = ($*[0] || 1).to_i
+
+begin
+  repo_downloader = RepoDownloader.new(data_dir, offset)
+  if repo_downloader.skip?
+    puts "PHASE 2 skipped"
+  else
+    repo_downloader.run!
+  end
+  exit(0)
+rescue RepoDownloader::Failed => e
+  $stderr.puts("PHASE 2 canceled: #{e.message}")
+  exit(1)
+end
+

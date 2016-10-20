@@ -1,0 +1,122 @@
+#!/usr/bin/ruby
+
+require "net/http"
+require "uri"
+require "json"
+require "fileutils"
+require "rubygems/user_interaction"
+
+require "whirly"
+
+class RepoListFetcher
+  class Failed < StandardError; end
+
+  SEARCH_URL = "https://api.github.com/search/repositories?q=language:LANGUAGE&sort=stars&page=PAGE&per_page=PER_PAGE"
+  MAX_COUNT = 100
+  DESTINATION_FILENAME = "/1/repositories.txt"
+
+  def initialize(data_dir, language, count, ui_mode = :interactive)
+    @data_dir    = data_dir
+    @language    = language
+    @count       = count.to_i
+    @badges      = []
+    page         = 1
+    counter      = @count
+    @ui_mode     = ui_mode
+    @ui          = Gem::ConsoleUI.new
+
+    until counter / MAX_COUNT == 0
+      @badges << [page, MAX_COUNT]
+      page += 1
+      counter -= MAX_COUNT
+    end
+    @badges << [page, counter] unless counter <= 0
+  end
+
+  def skip?
+    destination = @data_dir + DESTINATION_FILENAME
+    File.exists?(destination) && File.readlines(destination).size == @count
+  end
+
+  def run!
+    Whirly.start do
+      destination = prepare_destination
+
+      all_clone_urls = []
+      @badges.each{ |page, per_page|
+        Whirly.status = "Fetching data for #{@language} (#{@count} repositories) [#{page}/#{@badges.size}]"
+        all_clone_urls += fetch(page, per_page)
+      }
+
+      Whirly.status = "Writing repositories to #{destination}"
+      File.write(destination, all_clone_urls.join("\n"))
+    end
+
+    puts "PHASE 1: Success!"
+
+    true
+  end
+
+  def prepare_destination
+    destination = @data_dir + DESTINATION_FILENAME
+
+    if File.exists?(destination)
+      case @ui_mode
+      when :interactive
+        Whirly.pause
+        overwrite = @ui.ask_yes_no "PHASE 1 problem: #{destination} already exists, overwrite?", true
+        Whirly.continue
+      when :force
+        overwrite = true
+      else
+        overwrite = false
+      end
+
+      if overwrite
+        FileUtils.rm(destination)
+      else
+        raise Failed, "#{destination} already exists"
+      end
+    end
+    FileUtils.mkdir_p(File.dirname(destination))
+    FileUtils.touch(destination)
+
+    destination
+  end
+
+  def fetch(page, per_page)
+    search_url = SEARCH_URL.
+        sub("LANGUAGE", @language.to_s).
+        sub("PAGE", page.to_s).
+        sub("PER_PAGE", per_page.to_s)
+    # puts "GET #{search_url}"
+    parsed_search_url = URI.parse(search_url)
+    response = Net::HTTP.get_response(parsed_search_url)
+    data = JSON.load(response.body)
+    if items = data["items"]
+      items.map{ |repo_info| repo_info["clone_url"] }
+    elsif message = data["message"]
+      raise Failed, message
+    else
+      raise Failed, "Received invalid response: #{data}"
+    end
+  end
+end
+
+data_dir = File.expand_path(File.dirname(__FILE__) + "/data")
+language = $*[0] || "javascript"
+count    = $*[1] || 1000
+
+begin
+  repo_list_fetcher = RepoListFetcher.new(data_dir, language, count)
+  if repo_list_fetcher.skip?
+    puts "PHASE 1 skipped"
+  else
+    repo_list_fetcher.run!
+  end
+  exit(0)
+rescue RepoListFetcher::Failed => e
+  $stderr.puts("PHASE 1 canceled: #{e.message}")
+  exit(1)
+end
+

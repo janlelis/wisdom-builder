@@ -1,0 +1,45 @@
+#!/bin/bash
+
+echo "PHASE 6: Building language model files"
+current_dir=$(dirname $0)
+source_filename=javascript.bz2
+dest_arpa_filename=javascript.arpa
+dest_model_filename=javascript.model
+dest_vocab_filename=javascript.vocab
+dest_candidates_filename=javascript
+# order=4
+# prune="1 1 1 2"
+# order=5
+# prune="1 1 1 3"
+order=5
+prune="1 1 1 2 3"
+# order=6
+# prune="1 1 1 2 2 3"
+# order=6
+# prune="1 1 2 3 4 5"
+# order=6
+# prune="1 2 3 4 5 6"
+source_dir="$current_dir/data/5"
+dest_dir="$current_dir/data/6"
+kenlm="$current_dir/kenlm"
+
+mkdir -p $dest_dir
+rm -f "$dest_dir/$dest_arpa_filename"
+rm -f "$dest_dir/$dest_model_filename"
+rm -f "$dest_dir/$dest_vocab_filename"
+
+echo "PHASE 6: Decompress…"
+$kenlm/bin/cat_compressed $source_dir/$source_filename > $dest_dir/$source_filename
+
+echo "PHASE 6: Estimate model…"
+$kenlm/bin/lmplz -T /home/dan/tmp --skip_symbols -o $order --prune $prune < $dest_dir/$source_filename --arpa $dest_dir/$dest_arpa_filename --vocab_file $dest_dir/$dest_vocab_filename
+rm $dest_dir/$source_filename
+
+echo "PHASE 6: Build binary file…"
+$kenlm/bin/build_binary trie $dest_dir/$dest_arpa_filename $dest_dir/$dest_model_filename
+
+echo "PHASE 6: Build candidates file…"
+./build_candidates $dest_dir/$dest_vocab_filename $dest_dir/$dest_arpa_filename $dest_dir/$dest_candidates_filename
+
+echo "PHASE 6: Success"
+
